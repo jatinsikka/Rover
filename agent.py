@@ -18,6 +18,7 @@ import torch
 import gym
 from numpy.random import choice
 from copy import deepcopy
+import numpy as np
 from torch.nn.utils.convert_parameters import parameters_to_vector
 from torch.nn.utils.convert_parameters import vector_to_parameters
 
@@ -54,6 +55,7 @@ class TRPOAgent:
         self.cg_dampening = cg_dampening
         self.cg_tolerance = cg_tolerance
         self.cg_state_percent = cg_state_percent
+        self.learning_rate = 0.01
         self.distribution = torch.distributions.normal.Normal
 
         # Cuda check
@@ -113,28 +115,19 @@ class TRPOAgent:
         mu2 = new_policy(states)
         log_sigma2 = new_std
 
-        # # Detach other as gradient should only be w.r.t. to one
-        # if grad_new:
-        #     mu1, log_sigma1 = mu1.detach(), log_sigma1.detach()
-        # else:
-        #     mu2, log_sigma2 = mu2.detach(), log_sigma2.detach()
+        # Detach other as gradient should only be w.r.t. to one
+        if grad_new:
+            mu1, log_sigma1 = mu1.detach(), log_sigma1.detach()
+        else:
+            mu2, log_sigma2 = mu2.detach(), log_sigma2.detach()
 
-        # # Compute KL over all states
-        # kl_matrix = ((log_sigma2 - log_sigma1) + 0.5 * (log_sigma1.exp().pow(2)
-        #                                                 + (mu1 - mu2).pow(
-        #             2)) / log_sigma2.exp().pow(2) - 0.5)
+        # Compute KL over all states
+        kl_matrix = ((log_sigma2 - log_sigma1) + 0.5 * (log_sigma1.exp().pow(2)
+                                                        + (mu1 - mu2).pow(
+                    2)) / log_sigma2.exp().pow(2) - 0.5)
 
-        # # Sum over action dim, average over all states
-        # return kl_matrix.sum(1).mean()
-        
-        # Compute KL divergence using PyTorch's kl_div function
-        kl_divergence = torch.distributions.kl.kl_divergence(
-            torch.distributions.Normal(mu1, log_sigma1.exp()),
-            torch.distributions.Normal(mu2, log_sigma2.exp())
-        )
-
-        # Average over all states
-        return kl_divergence.mean()
+        # Sum over action dim, average over all states
+        return kl_matrix.sum(1).mean()
 
     def surrogate_objective(self, new_policy, new_std, states, actions,
                             log_probs, advantages):
@@ -268,10 +261,24 @@ class TRPOAgent:
         # Update buffers removing processed steps
         for key, storage in self.buffers.items():
             del storage[:num_batch_steps]
-
+    
+    #Not working
+    def calculate_loss(self, actions, rewards):
+        # Convert actions to a Tensor
+        actions = torch.Tensor(actions).view(-1, len(actions[0]))
+        # Get the probabilities of the actions from the policy network
+        probs = self.policy(actions)
+        # Ensure the output is a probability distribution (sums to 1)
+        probs = torch.nn.functional.softmax(probs, dim=-1)
+        # Calculate the log probabilities
+        log_probs = torch.log(probs)
+        # Calculate the loss
+        loss = -torch.sum(log_probs * rewards)
+        return loss
+    
     def train(self, env_name, seed=None, batch_size=12000, iterations=100,
-              max_episode_length=None, verbose=False):
-
+              max_episode_length=200, verbose=False, writer=None):
+        
         # Initialize env
         env = gym.make(env_name)
         if seed is not None:
@@ -286,7 +293,6 @@ class TRPOAgent:
 
         # Begin training
         observation = env.reset()
-        
         for iteration in range(iterations):
             # Set initial value to 0
             recording['num_episodes_in_iteration'].append(0)
@@ -321,18 +327,26 @@ class TRPOAgent:
                     observation = env.reset()
 
             # Print information if verbose
-            if verbose:
-                num_episode = recording['num_episodes_in_iteration'][-1]
-                avg = (round(sum(recording['episode_reward'][-num_episode:-1])
+            num_episode = recording['num_episodes_in_iteration'][-1]
+            avg = (round(sum(recording['episode_reward'][-num_episode:-1])
                              / (num_episode - 1), 3))
+            if verbose:
                 print(f'Average Reward over Iteration {iteration}: {avg}')
+
+            # Write to tensorboard
+            if writer is not None:
+                writer.add_scalar('Average Reward', avg, iteration)
+                #writer.add_scalar('Loss', self.calculate_loss(self.buffers['actions'], self.buffers['completed_rewards']), iteration)
+                
             # Optimize after batch
             self.optimize()
-
+            
+        # Close environment
+        writer.close()
         env.close()
-        # Return recording information
+        
         return recording
-
+            
     def save_model(self, path):
         torch.save({
             'policy': self.policy.state_dict(),

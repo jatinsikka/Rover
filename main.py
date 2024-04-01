@@ -3,9 +3,10 @@ import torch
 from agent import TRPOAgent
 import simple_driving
 import time
-
+from torch.utils.tensorboard import SummaryWriter
 
 def main():
+    writer = SummaryWriter()
     # Define a neural network for the policy
     nn = torch.nn.Sequential(torch.nn.Linear(8, 64), torch.nn.Tanh(),
                              torch.nn.Linear(64, 2))
@@ -16,8 +17,8 @@ def main():
     agent.load_model("agent.pth")
 
     # Train the agent on the SimpleDriving-v0 environment
-    agent.train("SimpleDriving-v0", seed=0, batch_size=5000, iterations=2,
-                max_episode_length=250, verbose=True)
+    agent.train("SimpleDriving-v0", seed=0, batch_size=15000, iterations=2,
+                max_episode_length=100, verbose=True, writer=writer)
 
     # Save the trained model
     agent.save_model("agent.pth")
