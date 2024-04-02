@@ -276,7 +276,7 @@ class TRPOAgent:
         loss = -torch.sum(log_probs * rewards)
         return loss
     
-    def train(self, env_name, seed=None, batch_size=12000, iterations=100,
+    def train(self, env_name, seed=None, batch_size=12000, iterations=1,
               max_episode_length=200, verbose=False, writer=None):
         
         # Initialize env
